@@ -40,16 +40,51 @@ The structure of this repository is the following:
 
 ## Install dependencies
 
-<code>braided.yml</code> is the environment file with all dependencies, needed to run the notebooks.
+Recommended (full environment for notebooks and scripts):
 
-To activate the environment follow these steps:
+```powershell
+cd C:\checkouts\dsaie_morph3\jamunet-morpho-braided-main
+conda env create -f braided.yml
+conda activate braided
+```
 
-- make sure to have the file <code>braided.yml</code> in your system (for Windows users, store it in <code>C:\Windows\System32</code>);
-- open the anaconda prompt;
-- run <code>conda env create -f braided.yml</code>;
-- verify that the environment is correctly installed by running <code>conda env list</code> and checking the environment exists;
-- activate the environment by running <code>conda activate braided</code>;
-- deactivate the environment by running <code>conda deactivate</code>;
+If the environment already exists, update it with:
+
+```powershell
+conda env update -f braided.yml --prune
+conda activate braided
+```
+
+Minimal packages for running <code>run_unet3d_full_example.py</code> only:
+
+```powershell
+pip install numpy pandas tifffile pillow torch
+```
+
+Optional package for georeferenced output generation:
+
+```powershell
+conda install -c conda-forge gdal
+```
+
+Notes:
+- <code>gdal</code> is not required when running with <code>--skip-georef</code>.
+- The default model checkpoint path is inside <code>model/models_trained</code> and must exist before inference.
+
+---
+
+## Run inference for one region and year (2021)
+
+From the repository root, run:
+
+```powershell
+cd C:\checkouts\dsaie_morph3\jamunet-morpho-braided-main
+python run_unet3d_full_example.py --region eval_r01 --target-year 2021 --skip-georef
+```
+
+Notes:
+- Replace <code>eval_r01</code> with the region you want to evaluate.
+- Remove <code>--skip-georef</code> to also create georeferenced outputs.
 
 ---
 
