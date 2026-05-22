@@ -10,8 +10,8 @@ from PIL import Image
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Prepare satellite_01 data for UNet3D_full inference.")
-    parser.add_argument("--data-root", default="data/satellite_01", help="Root folder for neutral dataset.")
+    parser = argparse.ArgumentParser(description="Prepare satellite data for UNet3D_full inference.")
+    parser.add_argument("--data-root", default="data/satellite", help="Root folder for dataset.")
     parser.add_argument("--collection", default="JRC_GSW1_4_MonthlyHistory", help="Collection tag in folder names.")
     parser.add_argument("--target-height", type=int, default=1000, help="Output image height.")
     parser.add_argument("--target-width", type=int, default=500, help="Output image width.")
@@ -31,7 +31,7 @@ def list_region_dirs(base_dir, collection):
         raise FileNotFoundError(f"Missing folder: {base_dir}")
     for folder in sorted(os.listdir(base_dir)):
         full = os.path.join(base_dir, folder)
-        if os.path.isdir(full) and folder.startswith(f"{collection}_eval_r"):
+        if os.path.isdir(full) and folder.startswith(f"{collection}_"):
             region_dirs.append(folder)
     return region_dirs
 
@@ -60,8 +60,12 @@ def center_crop_or_pad(image, target_h, target_w):
 
 
 def load_heading_map(data_root):
-    metadata_path = os.path.join(data_root, "regions", "eval_reaches.json")
-    if not os.path.exists(metadata_path):
+    candidates = [
+        os.path.join(data_root, "regions", "region_catalog.json"),
+        os.path.join(data_root, "regions", "eval_reaches.json"),
+    ]
+    metadata_path = next((path for path in candidates if os.path.exists(path)), None)
+    if metadata_path is None:
         return {}
 
     with open(metadata_path, "r", encoding="utf-8") as file:
@@ -145,19 +149,15 @@ def build_dataset_month_folders(args, region_dirs):
 
 
 def average_for_year(data_root, region_folder, year):
+    region_id = region_folder.replace("JRC_GSW1_4_MonthlyHistory_", "")
     monthly_images = []
     for month in [1, 2, 3, 4]:
         tif_path = os.path.join(
             data_root,
             f"dataset_month{month}",
             region_folder,
-            f"{year}_{month:02d}_01_{region_folder.split('_')[-2]}_{region_folder.split('_')[-1]}.tif",
+            f"{year}_{month:02d}_01_{region_id}.tif",
         )
-        # region id is eval_rXX, reconstructed from folder suffix
-        if not os.path.exists(tif_path):
-            alt_name = f"{year}_{month:02d}_01_{region_folder.replace('JRC_GSW1_4_MonthlyHistory_', '')}.tif"
-            tif_path = os.path.join(data_root, f"dataset_month{month}", region_folder, alt_name)
-
         if not os.path.exists(tif_path):
             raise FileNotFoundError(f"Missing month image for average: {tif_path}")
 
@@ -205,12 +205,12 @@ def main():
     args = parse_args()
     region_dirs = list_region_dirs(os.path.join(args.data_root, "original"), args.collection)
     if not region_dirs:
-        raise RuntimeError("No eval_rXX region folders found under original/")
+        raise RuntimeError(f"No {args.collection}_* region folders found under original/")
 
     preprocess_images(args, region_dirs)
     build_dataset_month_folders(args, region_dirs)
     build_averages(args, region_dirs)
-    print("satellite_01 preparation completed.")
+    print("satellite preparation completed.")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,10 @@
+"""Run UNet3D_full inference for coordinate-based regions.
+
+UNet3D_full is the best model available in this repository at the moment.
+If you want to use a different model, you can change the checkpoint or swap
+the model implementation while keeping the rest of the workflow unchanged.
+"""
+
 import os
 import argparse
 import subprocess
@@ -16,7 +23,6 @@ def _center_crop_or_pad(image: np.ndarray, target_shape, fill_value=0):
     target_h, target_w = target_shape
     src_h, src_w = image.shape
 
-    # Height adjust
     if src_h >= target_h:
         top = (src_h - target_h) // 2
         image_h = image[top : top + target_h, :]
@@ -30,7 +36,6 @@ def _center_crop_or_pad(image: np.ndarray, target_shape, fill_value=0):
             constant_values=fill_value,
         )
 
-    # Width adjust
     cur_h, cur_w = image_h.shape
     if cur_w >= target_w:
         left = (cur_w - target_w) // 2
@@ -52,7 +57,6 @@ def _reverse_center_crop_or_pad(image: np.ndarray, target_shape, fill_value=0):
     target_h, target_w = target_shape
     src_h, src_w = image.shape
 
-    # Reverse height step
     if target_h >= src_h:
         canvas = np.full((target_h, src_w), fill_value=fill_value, dtype=image.dtype)
         top = (target_h - src_h) // 2
@@ -62,7 +66,6 @@ def _reverse_center_crop_or_pad(image: np.ndarray, target_shape, fill_value=0):
         top = (src_h - target_h) // 2
         image_h = image[top : top + target_h, :]
 
-    # Reverse width step
     cur_h, cur_w = image_h.shape
     if target_w >= cur_w:
         canvas = np.full((cur_h, target_w), fill_value=fill_value, dtype=image_h.dtype)
@@ -77,8 +80,12 @@ def _reverse_center_crop_or_pad(image: np.ndarray, target_shape, fill_value=0):
 
 
 def _load_region_flow_heading(data_root: str, region_id: str):
-    metadata_path = os.path.join(data_root, "regions", "eval_reaches.json")
-    if not os.path.exists(metadata_path):
+    candidates = [
+        os.path.join(data_root, "regions", "region_catalog.json"),
+        os.path.join(data_root, "regions", "eval_reaches.json"),
+    ]
+    metadata_path = next((path for path in candidates if os.path.exists(path)), None)
+    if metadata_path is None:
         return None
 
     try:
@@ -94,7 +101,6 @@ def _load_region_flow_heading(data_root: str, region_id: str):
 
 
 def _restore_to_reference_space(image: np.ndarray, ref_shape, flow_heading_deg, binary=False):
-    # Preprocessing rotates by angle_ccw=flow_heading-180 and then center-crops/pads to model shape.
     angle_ccw = flow_heading_deg - 180.0
 
     dummy = Image.fromarray(np.zeros(ref_shape, dtype=np.uint8))
@@ -115,15 +121,15 @@ def _restore_to_reference_space(image: np.ndarray, ref_shape, flow_heading_deg, 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Run UNet3D_full inference on one or multiple neutral regions (eval_rXX)."
+        description="Run UNet3D_full inference on one or multiple regions identified by coordinate slugs."
     )
-    parser.add_argument("--data-root", default="data/satellite_01", help="Dataset root folder.")
+    parser.add_argument("--data-root", default="data/satellite", help="Dataset root folder.")
     parser.add_argument("--collection", default="JRC_GSW1_4_MonthlyHistory", help="Collection name prefix used in folder names.")
-    parser.add_argument("--region", default="eval_r01", help="Single region id (e.g., eval_r01).")
-    parser.add_argument("--regions", default="", help="Comma-separated region ids for batch inference (e.g., eval_r01,eval_r02).")
+    parser.add_argument("--region", default="lat24p6515_lon88p0207", help="Single region id (e.g., lat24p6515_lon88p0207).")
+    parser.add_argument("--regions", default="", help="Comma-separated region ids for batch inference (e.g., lat24p6515_lon88p0207,lat24p4349_lon88p4594).")
     parser.add_argument("--month", type=int, default=3, choices=[1, 2, 3, 4], help="Dataset month folder to use.")
     parser.add_argument("--target-year", type=int, default=2021, help="Year to predict (uses previous 4 years as input).")
-    parser.add_argument("--output-dir", default="outputs/unet3d_full_example", help="Base output directory.")
+    parser.add_argument("--output-dir", default="outputs/run_example", help="Base output directory.")
     parser.add_argument("--braided-python", default=r"C:\Users\chavarri\AppData\Local\miniforge3\envs\braided\python.exe", help="Python executable with GDAL installed.")
     parser.add_argument("--skip-georef", action="store_true", help="Skip georeferenced output generation.")
     return parser.parse_args()
@@ -198,15 +204,15 @@ def run_single_region(model, device, args, region_id):
 
     prediction_path = os.path.join(
         region_output_dir,
-        f"unet3d_full_prediction_probabilities_{region_id}_{args.target_year}.tif",
+        f"prediction_probabilities_{region_id}_{args.target_year}.tif",
     )
     binary_path = os.path.join(
         region_output_dir,
-        f"unet3d_full_prediction_binary_{region_id}_{args.target_year}.tif",
+        f"prediction_binary_{region_id}_{args.target_year}.tif",
     )
     binary_vis_tif_path = os.path.join(
         region_output_dir,
-        f"unet3d_full_prediction_binary_vis_{region_id}_{args.target_year}.tif",
+        f"prediction_binary_vis_{region_id}_{args.target_year}.tif",
     )
 
     tifffile.imwrite(prediction_path, prediction.squeeze(0).cpu().numpy().astype(np.float32))
@@ -216,11 +222,11 @@ def run_single_region(model, device, args, region_id):
 
     georef_prob_path = os.path.join(
         region_output_dir,
-        f"unet3d_full_prediction_probabilities_georef_{region_id}_{args.target_year}.tif",
+        f"prediction_probabilities_georef_{region_id}_{args.target_year}.tif",
     )
     georef_vis_path = os.path.join(
         region_output_dir,
-        f"unet3d_full_prediction_binary_vis_georef_{region_id}_{args.target_year}.tif",
+        f"prediction_binary_vis_georef_{region_id}_{args.target_year}.tif",
     )
 
     georef_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "georeference_output.py")
@@ -316,3 +322,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

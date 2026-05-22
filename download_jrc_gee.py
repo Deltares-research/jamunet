@@ -37,6 +37,14 @@ def km_offsets_to_latlon(center_lat, center_lon, east_km, north_km):
     return lon, lat
 
 
+def format_coord_slug(lat, lon):
+    lat_part = f"{abs(lat):.4f}".replace(".", "p")
+    lon_part = f"{abs(lon):.4f}".replace(".", "p")
+    lat_prefix = "latm" if lat < 0 else "lat"
+    lon_prefix = "lonm" if lon < 0 else "lon"
+    return f"{lat_prefix}{lat_part}_{lon_prefix}{lon_part}"
+
+
 def build_rotated_polygon(center_lat, center_lon, u_east, u_north, tile_length_km, tile_width_km):
     # v is the local cross-section unit vector (left side looking downstream).
     v_east = -u_north
@@ -103,15 +111,18 @@ def build_reaches(
 
         center_lat = start_lat + t * (end_lat - start_lat)
         center_lon = start_lon + t * (end_lon - start_lon)
-        region_id = f"eval_r{i + 1:02d}"
+        shift_tag = str(i + 1)
+        shift_enabled = shift_tag in southwest_shift_reaches or f"eval_r{i + 1:02d}" in southwest_shift_reaches
 
-        if region_id in southwest_shift_reaches and (shift_west_km > 0.0 or shift_south_km > 0.0):
+        if shift_enabled and (shift_west_km > 0.0 or shift_south_km > 0.0):
             center_lon, center_lat = km_offsets_to_latlon(
                 center_lat,
                 center_lon,
                 east_km=-shift_west_km,
                 north_km=-shift_south_km,
             )
+
+        region_id = format_coord_slug(center_lat, center_lon)
 
         polygon = build_rotated_polygon(
             center_lat=center_lat,
@@ -141,9 +152,9 @@ def build_reaches(
                 "center_lon": center_lon,
                 "flow_heading_deg": heading_deg,
                 "polygon_lonlat": polygon,
-                "shifted_southwest": region_id in southwest_shift_reaches,
-                "shift_west_km": shift_west_km if region_id in southwest_shift_reaches else 0.0,
-                "shift_south_km": shift_south_km if region_id in southwest_shift_reaches else 0.0,
+                "shifted_southwest": shift_enabled,
+                "shift_west_km": shift_west_km if shift_enabled else 0.0,
+                "shift_south_km": shift_south_km if shift_enabled else 0.0,
             }
         )
 
@@ -189,7 +200,7 @@ def parse_args():
     parser.add_argument("--end-lat", type=float, default=23.785158)
     parser.add_argument("--end-lon", type=float, default=89.775544)
 
-    parser.add_argument("--data-root", default="data/satellite_01")
+    parser.add_argument("--data-root", default="data/satellite")
     parser.add_argument("--collection", default="JRC/GSW1_4/MonthlyHistory")
     parser.add_argument("--collection-tag", default="JRC_GSW1_4_MonthlyHistory")
 
@@ -197,7 +208,7 @@ def parse_args():
     parser.add_argument("--tile-length-km", type=float, default=60.0)
     parser.add_argument("--tile-width-km", type=float, default=30.0)
     parser.add_argument("--overlap", type=float, default=0.2)
-    parser.add_argument("--southwest-shift-reaches", default="eval_r03,eval_r04")
+    parser.add_argument("--southwest-shift-reaches", default="3,4")
     parser.add_argument("--shift-west-km", type=float, default=6.0)
     parser.add_argument("--shift-south-km", type=float, default=6.0)
 
@@ -287,12 +298,12 @@ def main():
     os.makedirs(os.path.join(args.data_root, "original"), exist_ok=True)
     os.makedirs(os.path.join(args.data_root, "regions"), exist_ok=True)
 
-    reaches_metadata_path = os.path.join(args.data_root, "regions", "eval_reaches.json")
+    reaches_metadata_path = os.path.join(args.data_root, "regions", "region_catalog.json")
     with open(reaches_metadata_path, "w", encoding="utf-8") as f:
         json.dump(reaches, f, indent=2)
     print(f"Saved reach metadata: {reaches_metadata_path}")
 
-    reaches_geojson_path = os.path.join(args.data_root, "regions", "eval_reaches.geojson")
+    reaches_geojson_path = os.path.join(args.data_root, "regions", "region_catalog.geojson")
     write_reaches_geojson(reaches, reaches_geojson_path)
     print(f"Saved reach polygons: {reaches_geojson_path}")
 

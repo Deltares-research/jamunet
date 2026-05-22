@@ -29,12 +29,17 @@
 ## Repository structure
 
 The structure of this repository is the following:
-- <code>data</code>, empty folder, data can be send if requested; 
+- <code>data</code>, dataset folders and region metadata for training/evaluation; 
 - <code>images</code>, contains the poster presented during the final presentation; 
 - <code>model</code>, contains the modules and noteboooks with the deep-learning model;
 - <code>postprocessing</code>, contains the modules used for the data postprocessing;
 - <code>preliminary</code>, contains the notebooks with the preliminary data analysis, satellite image visualization, preprocessing steps, and other examples; 
 - <code>preprocessing</code>, contains the modules used for the data preprocessing.
+
+Data naming note:
+- Satellite region folders now use coordinate-based IDs (example: <code>lat24p6515_lon88p0207</code>).
+- Region metadata is stored in <code>data/satellite/regions/region_catalog.json</code>.
+- See <code>preprocessing/README.md</code> for detailed input/output structure and script-level documentation.
 
 ---
 
@@ -55,7 +60,7 @@ conda env update -f braided.yml --prune
 conda activate braided
 ```
 
-Minimal packages for running <code>run_unet3d_full_example.py</code> only:
+Minimal packages for running <code>run_example.py</code> only:
 
 ```powershell
 pip install numpy pandas tifffile pillow torch
@@ -70,6 +75,7 @@ conda install -c conda-forge gdal
 Notes:
 - <code>gdal</code> is not required when running with <code>--skip-georef</code>.
 - The default model checkpoint path is inside <code>model/models_trained</code> and must exist before inference.
+- The <code>--region</code> value is the coordinate-based region ID from the region catalog.
 
 ---
 
@@ -79,11 +85,11 @@ From the repository root, run:
 
 ```powershell
 cd C:\checkouts\dsaie_morph3\jamunet-morpho-braided-main
-python run_unet3d_full_example.py --region eval_r01 --target-year 2021 --skip-georef
+python run_example.py --region lat24p6515_lon88p0207 --target-year 2021 --skip-georef
 ```
 
 Notes:
-- Replace <code>eval_r01</code> with the region you want to evaluate.
+- Replace <code>lat24p6515_lon88p0207</code> with the region you want to evaluate.
 - Remove <code>--skip-georef</code> to also create georeferenced outputs.
 
 ---

@@ -10,7 +10,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Create original_visible and preprocesses_visible PNG figures scaled to 0-255."
     )
-    parser.add_argument("--data-root", default="data/satellite_01", help="Dataset root.")
+    parser.add_argument("--data-root", default="data/satellite", help="Dataset root.")
     parser.add_argument(
         "--collection",
         default="JRC_GSW1_4_MonthlyHistory",
@@ -57,7 +57,7 @@ def list_region_folders(base_dir: str, collection: str):
     folders = []
     for name in sorted(os.listdir(base_dir)):
         full = os.path.join(base_dir, name)
-        if os.path.isdir(full) and name.startswith(f"{collection}_eval_r"):
+        if os.path.isdir(full) and name.startswith(f"{collection}_"):
             folders.append(name)
     return folders
 

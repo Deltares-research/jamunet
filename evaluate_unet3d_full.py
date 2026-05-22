@@ -21,17 +21,17 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Evaluate UNet3D_full on one or more neutral regions/years and report classification metrics."
     )
-    parser.add_argument("--data-root", default="data/satellite_01", help="Dataset root folder.")
+    parser.add_argument("--data-root", default="data/satellite", help="Dataset root folder.")
     parser.add_argument(
         "--collection",
         default="JRC_GSW1_4_MonthlyHistory",
         help="Collection name prefix used in folder names.",
     )
-    parser.add_argument("--region", default="eval_r01", help="Single region id, used when --regions is empty.")
+    parser.add_argument("--region", default="lat24p6515_lon88p0207", help="Single region id, used when --regions is empty.")
     parser.add_argument(
         "--regions",
         default="",
-        help="Comma-separated region ids for batch evaluation, e.g. eval_r01,eval_r02.",
+        help="Comma-separated region ids for batch evaluation, e.g. lat24p6515_lon88p0207,lat24p4349_lon88p4594.",
     )
     parser.add_argument(
         "--month",
@@ -55,7 +55,7 @@ def parse_args():
     parser.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT, help="Path to pretrained model weights.")
     parser.add_argument(
         "--output-dir",
-        default="outputs/unet3d_full_evaluation",
+        default="outputs/run_example_evaluation",
         help="Directory where metrics reports are written.",
     )
     parser.add_argument(
@@ -234,11 +234,11 @@ def evaluate_region_year(model, device, args, region_id, target_year):
         os.makedirs(region_output_dir, exist_ok=True)
         probability_path = os.path.join(
             region_output_dir,
-            f"unet3d_full_eval_probabilities_{region_id}_{target_year}.tif",
+            f"eval_probabilities_{region_id}_{target_year}.tif",
         )
         binary_path = os.path.join(
             region_output_dir,
-            f"unet3d_full_eval_binary_{region_id}_{target_year}.tif",
+            f"eval_binary_{region_id}_{target_year}.tif",
         )
         tifffile.imwrite(probability_path, prediction.cpu().numpy().astype(np.float32))
         tifffile.imwrite(binary_path, binary_prediction.cpu().numpy().astype(np.uint8))
