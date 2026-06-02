@@ -41,8 +41,9 @@ Model-ready region metadata and polygons are stored in:
 Catalog usage notes:
 
 - `region_catalog.json` describes the original download footprints (geographic regions).
-- `region_catalog_model_ready.json` and `region_catalog_model_ready.geojson` describe model-ready footprints derived from the fixed preprocessing image size (default 1000x500 pixels at 60 m resolution).
-- Use the model-ready catalog files when you want polygons that match the standardized model input dimensions.
+- `region_catalog_model_ready.json` and `region_catalog_model_ready.geojson` include only regions that currently have available source TIFF images.
+- The model-ready footprint geometry mirrors the actual available source-image footprint from `region_catalog.json`.
+- Model-ready records include availability metadata (`source_folder`, `available_image_count`, `footprint_source`) and keep model input metadata (`model_ready_height_px`, `model_ready_width_px`, `pixel_size_m`, `model_ready_area_km2`).
 
 Generate or refresh the model-ready catalog files with:
 
@@ -54,6 +55,33 @@ python prepare_satellite_dataset.py --model-ready-catalog-only
 This command writes:
 - `data/satellite/regions/region_catalog_model_ready.json`
 - `data/satellite/regions/region_catalog_model_ready.geojson`
+
+To visualize the covered area of each model-ready image footprint:
+
+```powershell
+cd <path-to-repo>
+python scripts/utils/plot_model_ready_footprints.py --label-regions
+```
+
+This command writes:
+- `data/satellite/regions/model_ready_footprints.png`
+
+To render the same footprints on top of an OpenStreetMap background:
+
+```powershell
+cd <path-to-repo>
+python scripts/utils/plot_model_ready_footprints.py --label-regions --with-basemap --output data/satellite/regions/model_ready_footprints_osm.png
+```
+
+If a specific reach orientation is wrong, add or update a heading override in:
+- `data/satellite/regions/model_ready_heading_overrides.json`
+
+Then regenerate the model-ready catalog:
+
+```powershell
+cd <path-to-repo>
+python prepare_satellite_dataset.py --model-ready-catalog-only
+```
 
 For detailed preprocessing inputs and outputs, see:
 `preprocessing/README.md`

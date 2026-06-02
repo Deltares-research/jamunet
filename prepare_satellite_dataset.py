@@ -49,6 +49,185 @@ def list_region_dirs(base_dir, collection):
     return region_dirs
 
 
+def index_available_regions(data_root, collection):
+    """Index regions that actually have available TIFF images on disk."""
+    original_root = os.path.join(data_root, "original")
+    available = {}
+    if not os.path.isdir(original_root):
+        return available
+
+    for folder_name in os.listdir(original_root):
+        folder_path = os.path.join(original_root, folder_name)
+        if not (os.path.isdir(folder_path) and folder_name.startswith(f"{collection}_")):
+            continue
+
+        region_id = extract_region_id_from_folder(folder_name, collection)
+        tif_count = len([name for name in os.listdir(folder_path) if name.endswith(".tif")])
+        if tif_count > 0:
+            available[region_id] = {
+                "folder": folder_name,
+                "image_count": tif_count,
+            }
+
+    return available
+
+
+def _is_valid_polygon(coords):
+    return isinstance(coords, list) and len(coords) >= 4
+
+
+def _bbox_from_polygon(coords):
+    lon_values = [float(p[0]) for p in coords[:-1]]
+    lat_values = [float(p[1]) for p in coords[:-1]]
+    return min(lon_values), max(lon_values), min(lat_values), max(lat_values)
+
+
+def _build_bbox_polygon(lon_min, lon_max, lat_min, lat_max):
+    return [
+        [lon_max, lat_min],
+        [lon_max, lat_max],
+        [lon_min, lat_max],
+        [lon_min, lat_min],
+        [lon_max, lat_min],
+    ]
+
+
+def infer_rotation_angle_from_shape(image_shape):
+    """Infer ccw rotation angle needed to align flow top-to-bottom from source image shape."""
+    ratio_h_w = round(float(image_shape[0]) / float(image_shape[1]), 2)
+    if ratio_h_w == 2:
+        return 0.0
+    if ratio_h_w == 1:
+        return 45.0
+    if ratio_h_w == 0.5:
+        return 90.0
+    return None
+
+
+def infer_flow_heading_from_image_shape(image_shape):
+    """Convert inferred ccw rotation angle to downstream heading (clockwise from north)."""
+    angle_ccw = infer_rotation_angle_from_shape(image_shape)
+    if angle_ccw is None:
+        return None
+    return (180.0 + angle_ccw) % 360.0
+
+
+def extract_region_id_from_folder(region_folder, collection):
+    prefix = f"{collection}_"
+    if region_folder.startswith(prefix):
+        return region_folder.replace(prefix, "")
+    return region_folder
+
+
+def get_region_image_shape(data_root, collection, region_key):
+    original_root = os.path.join(data_root, "original")
+    if not os.path.isdir(original_root):
+        return None
+
+    folder_candidates = []
+    if region_key.startswith(f"{collection}_"):
+        folder_candidates.append(region_key)
+    folder_candidates.append(f"{collection}_{region_key}")
+
+    for folder_name in folder_candidates:
+        folder_path = os.path.join(original_root, folder_name)
+        if not os.path.isdir(folder_path):
+            continue
+        tif_names = sorted(name for name in os.listdir(folder_path) if name.endswith(".tif"))
+        if not tif_names:
+            continue
+        sample_path = os.path.join(folder_path, tif_names[0])
+        with tifffile.TiffFile(sample_path) as tif:
+            return tif.pages[0].shape
+
+    return None
+
+
+def infer_heading_for_region_key(data_root, collection, region_key):
+    shape = get_region_image_shape(data_root, collection, region_key)
+    if shape is None:
+        return None
+    return infer_flow_heading_from_image_shape(shape)
+
+
+def load_heading_overrides(data_root):
+    """Load optional per-region heading overrides from JSON."""
+    overrides_path = os.path.join(data_root, "regions", "model_ready_heading_overrides.json")
+    if not os.path.exists(overrides_path):
+        return {}
+
+    with open(overrides_path, "r", encoding="utf-8") as file:
+        payload = json.load(file)
+
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"Heading override file must be a JSON object mapping region IDs to heading degrees: {overrides_path}"
+        )
+
+    return {str(key): float(value) for key, value in payload.items()}
+
+
+def heading_from_vector(east_km, north_km):
+    if abs(east_km) < 1e-9 and abs(north_km) < 1e-9:
+        return None
+    return float((math.degrees(math.atan2(east_km, north_km)) + 360.0) % 360.0)
+
+
+def infer_headings_from_centerline(metadata):
+    """Infer per-region heading from local tangent of nearby region centers."""
+    points = []
+    for item in metadata:
+        region_id = item.get("region_id")
+        if not region_id:
+            continue
+        if "center_lat" not in item or "center_lon" not in item:
+            continue
+        points.append(
+            {
+                "region_id": str(region_id),
+                "center_lat": float(item["center_lat"]),
+                "center_lon": float(item["center_lon"]),
+            }
+        )
+
+    if len(points) < 2:
+        return {}
+
+    mean_lat = float(sum(p["center_lat"] for p in points) / len(points))
+    cos_mean_lat = max(math.cos(math.radians(mean_lat)), 1e-6)
+
+    coords = np.array(
+        [
+            [p["center_lon"] * 111.32 * cos_mean_lat, p["center_lat"] * 111.32]
+            for p in points
+        ],
+        dtype=np.float64,
+    )
+
+    headings = {}
+    n_points = len(points)
+    k = min(5, n_points)
+
+    for i, point in enumerate(points):
+        delta = coords - coords[i]
+        dist2 = np.sum(delta * delta, axis=1)
+        neighbor_idx = np.argsort(dist2)[:k]
+        neighborhood = coords[neighbor_idx]
+        if neighborhood.shape[0] < 2:
+            continue
+
+        neighborhood_centered = neighborhood - neighborhood.mean(axis=0)
+        cov = np.cov(neighborhood_centered, rowvar=False)
+        eig_vals, eig_vecs = np.linalg.eigh(cov)
+        principal_axis = eig_vecs[:, int(np.argmax(eig_vals))]
+
+        heading = heading_from_vector(float(principal_axis[0]), float(principal_axis[1]))
+        if heading is not None:
+            headings[point["region_id"]] = heading
+
+    return headings
+
+
 def center_crop_or_pad(image, target_h, target_w):
     src_h, src_w = image.shape[:2]
 
@@ -72,19 +251,69 @@ def center_crop_or_pad(image, target_h, target_w):
     return out
 
 
-def load_heading_map(data_root):
+def load_heading_map(data_root, collection):
     candidates = [
         os.path.join(data_root, "regions", "region_catalog.json"),
         os.path.join(data_root, "regions", "eval_reaches.json"),
     ]
     metadata_path = next((path for path in candidates if os.path.exists(path)), None)
     if metadata_path is None:
-        return {}
+        metadata = []
+    else:
+        with open(metadata_path, "r", encoding="utf-8") as file:
+            metadata = json.load(file)
 
-    with open(metadata_path, "r", encoding="utf-8") as file:
-        data = json.load(file)
+    heading_map = {}
 
-    return {item["region_id"]: float(item.get("flow_heading_deg", 180.0)) for item in data}
+    centerline_heading_map = infer_headings_from_centerline(metadata)
+
+    for item in metadata:
+        region_id = item.get("region_id")
+        source_region_id = item.get("source_region_id")
+        source_folder = item.get("source_folder")
+
+        heading = item.get("flow_heading_deg")
+        if heading is None and region_id in centerline_heading_map:
+            heading = centerline_heading_map[region_id]
+        if heading is None:
+            for key in [source_region_id, region_id, source_folder]:
+                if key:
+                    inferred = infer_heading_for_region_key(data_root, collection, key)
+                    if inferred is not None:
+                        heading = inferred
+                        break
+        if heading is None:
+            heading = 180.0
+
+        heading = float(heading)
+
+        for key in [region_id, source_region_id]:
+            if key:
+                heading_map[key] = heading
+
+        if source_folder and source_folder.startswith(f"{collection}_"):
+            source_folder_region_id = extract_region_id_from_folder(source_folder, collection)
+            heading_map[source_folder_region_id] = heading
+
+    original_root = os.path.join(data_root, "original")
+    if os.path.isdir(original_root):
+        for folder_name in os.listdir(original_root):
+            folder_path = os.path.join(original_root, folder_name)
+            if not (os.path.isdir(folder_path) and folder_name.startswith(f"{collection}_")):
+                continue
+
+            region_id = extract_region_id_from_folder(folder_name, collection)
+            if region_id in heading_map:
+                continue
+
+            inferred = infer_heading_for_region_key(data_root, collection, region_id)
+            if inferred is not None:
+                heading_map[region_id] = float(inferred)
+
+    for key, heading in load_heading_overrides(data_root).items():
+        heading_map[key] = float(heading)
+
+    return heading_map
 
 
 def rotate_to_south(image, flow_heading_deg):
@@ -143,12 +372,16 @@ def write_geojson(records, geojson_path):
                 "properties": {
                     "region_id": item["region_id"],
                     "source_region_id": item["source_region_id"],
+                    "source_folder": item.get("source_folder"),
+                    "available_image_count": item.get("available_image_count"),
+                    "footprint_source": item.get("footprint_source"),
                     "flow_heading_deg": item["flow_heading_deg"],
                     "model_ready_height_px": item["model_ready_height_px"],
                     "model_ready_width_px": item["model_ready_width_px"],
                     "pixel_size_m": item["pixel_size_m"],
                     "model_ready_length_km": item["model_ready_length_km"],
                     "model_ready_width_km": item["model_ready_width_km"],
+                    "model_ready_area_km2": item["model_ready_area_km2"],
                     "center_lat": item["center_lat"],
                     "center_lon": item["center_lon"],
                 },
@@ -195,38 +428,50 @@ def build_model_ready_region_catalog(args):
 
     model_ready_length_km = (args.target_height * args.pixel_size_m) / 1000.0
     model_ready_width_km = (args.target_width * args.pixel_size_m) / 1000.0
+    model_ready_area_km2 = model_ready_length_km * model_ready_width_km
+    heading_map = load_heading_map(args.data_root, args.collection)
+    available_regions = index_available_regions(args.data_root, args.collection)
 
     records = []
     for item in source_catalog:
         source_region_id = item.get("region_id", "")
         region_id = source_region_id.replace("eval_", "") if source_region_id.startswith("eval_") else source_region_id
 
+        # Keep only regions that actually have available source TIFFs.
+        if region_id not in available_regions:
+            continue
+
+        polygon = item.get("polygon_lonlat")
+        if not _is_valid_polygon(polygon):
+            lon_min = item.get("lon_min")
+            lon_max = item.get("lon_max")
+            lat_min = item.get("lat_min")
+            lat_max = item.get("lat_max")
+            if None not in [lon_min, lon_max, lat_min, lat_max]:
+                polygon = _build_bbox_polygon(float(lon_min), float(lon_max), float(lat_min), float(lat_max))
+            else:
+                # Skip records with no trustworthy footprint geometry.
+                continue
+
+        lon_min, lon_max, lat_min, lat_max = _bbox_from_polygon(polygon)
+
         center_lat = float(item["center_lat"])
         center_lon = float(item["center_lon"])
-        flow_heading_deg = float(item.get("flow_heading_deg", 180.0))
-
-        heading_rad = math.radians(flow_heading_deg)
-        u_east = math.sin(heading_rad)
-        u_north = math.cos(heading_rad)
-
-        polygon = build_rotated_polygon(
-            center_lat=center_lat,
-            center_lon=center_lon,
-            u_east=u_east,
-            u_north=u_north,
-            tile_length_km=model_ready_length_km,
-            tile_width_km=model_ready_width_km,
-        )
-
-        lon_values = [p[0] for p in polygon[:-1]]
-        lat_values = [p[1] for p in polygon[:-1]]
-        lon_min, lon_max = min(lon_values), max(lon_values)
-        lat_min, lat_max = min(lat_values), max(lat_values)
+        flow_heading_deg = item.get("flow_heading_deg")
+        if flow_heading_deg is None:
+            flow_heading_deg = heading_map.get(source_region_id)
+        if flow_heading_deg is None:
+            flow_heading_deg = heading_map.get(region_id)
+        if flow_heading_deg is None:
+            flow_heading_deg = 180.0
+        flow_heading_deg = float(flow_heading_deg)
 
         records.append(
             {
                 "region_id": region_id,
                 "source_region_id": source_region_id,
+                "source_folder": available_regions[region_id]["folder"],
+                "available_image_count": int(available_regions[region_id]["image_count"]),
                 "center_lat": center_lat,
                 "center_lon": center_lon,
                 "flow_heading_deg": flow_heading_deg,
@@ -235,6 +480,8 @@ def build_model_ready_region_catalog(args):
                 "pixel_size_m": float(args.pixel_size_m),
                 "model_ready_length_km": float(model_ready_length_km),
                 "model_ready_width_km": float(model_ready_width_km),
+                "model_ready_area_km2": float(model_ready_area_km2),
+                "footprint_source": "region_catalog_available_images",
                 "lat_min": lat_min,
                 "lat_max": lat_max,
                 "lon_min": lon_min,
@@ -315,7 +562,7 @@ def preprocess_images(args, region_dirs):
     original_root = os.path.join(args.data_root, "original")
     preprocessed_root = os.path.join(args.data_root, "preprocessed")
     os.makedirs(preprocessed_root, exist_ok=True)
-    heading_map = load_heading_map(args.data_root)
+    heading_map = load_heading_map(args.data_root, args.collection)
 
     total = 0
     for region_folder in region_dirs:
