@@ -1,114 +1,113 @@
-# JamUNet: predicting the morphological changes of braided sand-bed rivers with deep learning
+# JamUNet: Predicting Morphological Changes of Braided Sand-Bed Rivers with Deep Learning
 
-# JamUNet: predicting the morphological changes of braided sand-bed rivers with deep learning
+JamUNet is a deep-learning project for predicting river morphology changes in braided sand-bed rivers using satellite imagery.
 
-<table>
-  <tr>
-    <td>
-      <img src=".\images\1994-01-25.png" width="1000" alt="Brahmaputra-Jamuna River">
-    </td>
-    <td>
-      <p style="font-size: 16px;">
-        This repository stores the data, code, and other files necessary for the completion of the group project Morph 3 from the course CEGM2003 Data Science and Artificial Intelligence for engineers conducted by >Gilles Douwes, Maarten de Nooijer, Berend Bouvy, Wouter Niessen and Shijie Hu</a>, students of the MSc Applied Earth Sciences program. This group project and the repository is mainly based on the Master's thesis of <a href="https://nl.linkedin.com/in/antonio-magherini-4349b2229">Antonio Magherini</a>, student of the MSc Civil Engineering program - Hydraulic Engineering track, with a specialisation in River Engineering at the <a href="https://www.tudelft.nl/citg">Faculty of Civil Engineering and Geosciences</a> of Delft University of Technology (TU Delft).
-      </p>
-      <p style="font-size: 16px;">
-        The manuscript can be found at <a href="https://repository.tudelft.nl/record/uuid:38ea0798-dd3d-4be2-b937-b80621957348">TU Delft repository</a>.
-      </p>
-      <p style="font-size: 16px;">
-        For any information, feel free to contact the author at: <a href="mailto:nooijermm@gmail.com"><em>noooijermm@gmail.com</em></a>.
-      </p>
-      <p style="margin-top: 100px;">
-        <em>The image represents the Brahmaputra-Jamuna River at the border between India and Bangladesh. The image was taken on January 25, 1994. It was retrieved from <a href="https://earthengine.google.com/">Google Earth Engine</a> <a href="https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_LT05_C02_T1_L2">USGS Landsat 5 collection</a>.</em>
-      </p>
-    </td>
-  </tr>
-</table>
+## Project Origin and Repository Evolution
 
----
+This work originates from the MSc thesis research of Antonio Magherini at TU Delft and Deltares.
 
-## Repository structure
+The codebase and workflows were later extended and modified by students in the CEGM2003 course (Data Science and Artificial Intelligence for Engineers).
 
-The structure of this repository is the following:
-- <code>data</code>, dataset folders and region metadata for training/evaluation;
-- <code>images</code>, poster and figure assets;
-- <code>model</code>, model modules, trained checkpoints, and notebook subfolder;
-- <code>postprocessing</code>, modules used for data postprocessing;
-- <code>preprocessing</code>, modules used for data preprocessing;
-- <code>scripts</code>, runnable entry-point scripts grouped by stage:
-  - <code>scripts/data</code>: data download and preparation
-  - <code>scripts/inference</code>: inference and evaluation
-  - <code>scripts/postprocessing</code>: georeferencing and results plots
-  - <code>scripts/utils</code>: maintenance and helper utilities
+This repository contains a refactored and separated version of that evolving work, with reorganized scripts, documentation, and dataset conventions to support reproducible training and inference.
 
-Data naming note:
-- Satellite region folders now use coordinate-based IDs (example: <code>lat24p6515_lon88p0207</code>).
-- Region metadata is stored in <code>data/satellite/regions/region_catalog.json</code>.
-- See <code>preprocessing/README.md</code> for detailed input/output structure and script-level documentation.
+For the original thesis manuscript, see the TU Delft repository:
+https://repository.tudelft.nl/record/uuid:38ea0798-dd3d-4be2-b937-b80621957348
 
----
+## Repository Structure
 
-## Install dependencies
+Main folders:
 
-Recommended (full environment for notebooks and scripts):
+- `data`: Dataset folders and region metadata for training and evaluation.
+- `Images`: Poster and visual project assets.
+- `model`: Deep-learning modules, notebooks, and trained model checkpoints.
+- `postprocessing`: Utilities for metrics, plotting, and result export.
+- `preprocessing`: Utilities for dataset generation and preprocessing workflows.
+- `benchmarks`: Baseline and no-change scenario experiments.
+
+Supporting scripts are available in the repository root for data preparation, evaluation, georeferencing, and figure generation.
+
+## Data Naming Convention
+
+Satellite region folders use coordinate-based IDs, for example:
+`lat24p6515_lon88p0207`
+
+Region metadata is stored in:
+`data/satellite/regions/region_catalog.json`
+
+Model-ready region metadata and polygons are stored in:
+`data/satellite/regions/region_catalog_model_ready.json`
+`data/satellite/regions/region_catalog_model_ready.geojson`
+
+Catalog usage notes:
+
+- `region_catalog.json` describes the original download footprints (geographic regions).
+- `region_catalog_model_ready.json` and `region_catalog_model_ready.geojson` describe model-ready footprints derived from the fixed preprocessing image size (default 1000x500 pixels at 60 m resolution).
+- Use the model-ready catalog files when you want polygons that match the standardized model input dimensions.
+
+For detailed preprocessing inputs and outputs, see:
+`preprocessing/README.md`
+
+## Installation
+
+Recommended full environment (scripts + notebooks):
 
 ```powershell
-cd C:\checkouts\dsaie_morph3\jamunet-morpho-braided-main
+cd <path-to-repo>
 conda env create -f braided.yml
 conda activate braided
 ```
 
-If the environment already exists, update it with:
+If the environment already exists:
 
 ```powershell
 conda env update -f braided.yml --prune
 conda activate braided
 ```
 
-Minimal packages for running inference only:
+Minimal packages for running only the example inference script:
 
 ```powershell
 pip install numpy pandas tifffile pillow torch
 ```
 
-Optional package for georeferenced output generation:
+Optional dependency for georeferenced output generation:
 
 ```powershell
 conda install -c conda-forge gdal
 ```
 
 Notes:
-- <code>gdal</code> is not required when running with <code>--skip-georef</code>.
-- The default model checkpoint path is inside <code>model/models_trained</code> and must exist before inference.
-- The <code>--region</code> value is the coordinate-based region ID from the region catalog.
 
----
+- GDAL is not required when using `--skip-georef`.
+- The default model checkpoint path is inside `model/models_trained`.
+- The `--region` value must match a coordinate-based region ID from the region catalog.
+- Running `prepare_satellite_dataset.py` also writes model-ready polygon catalogs under `data/satellite/regions/`.
 
-## Run inference for one region and year (2021)
+## Quick Inference Example (Target Year 2021)
 
-From the repository root, run:
+From the repository root:
 
 ```powershell
-cd C:\checkouts\dsaie_morph3\jamunet-morpho-braided-main
-python -m scripts.inference.run_example --region lat24p6515_lon88p0207 --target-year 2021 --skip-georef
+cd <path-to-repo>
+python run_example.py --region lat24p6515_lon88p0207 --target-year 2021 --skip-georef
 ```
 
 Notes:
-- Replace <code>lat24p6515_lon88p0207</code> with the region you want to evaluate.
-- Remove <code>--skip-georef</code> to also create georeferenced outputs.
 
----
+- Replace `lat24p6515_lon88p0207` with your desired region ID.
+- Remove `--skip-georef` to also generate georeferenced outputs.
 
-## Cite
+## Citation
 
-Please cite the [Master thesis](https://repository.tudelft.nl/record/uuid:38ea0798-dd3d-4be2-b937-b80621957348) as:
+Please cite the original thesis as:
 
-```
+```bibtex
 @mastersthesis{magherini2024,
-author = {Magherini, A.},
-title = {{JamUNet: predicting the morphological changes of braided sand-bed rivers with deep learning}},
-school = {{Delft University of Technology}},
-year = {2024},
-month = {10},
-howpublished = {\url{https://repository.tudelft.nl/record/uuid:38ea0798-dd3d-4be2-b937-b80621957348}}
+  author       = {Magherini, A.},
+  title        = {{JamUNet: predicting the morphological changes of braided sand-bed rivers with deep learning}},
+  school       = {{Delft University of Technology}},
+  year         = {2024},
+  month        = {10},
+  howpublished = {\url{https://repository.tudelft.nl/record/uuid:38ea0798-dd3d-4be2-b937-b80621957348}}
 }
 ```
