@@ -29,12 +29,16 @@
 ## Repository structure
 
 The structure of this repository is the following:
-- <code>data</code>, dataset folders and region metadata for training/evaluation; 
-- <code>images</code>, contains the poster presented during the final presentation; 
-- <code>model</code>, contains the modules and noteboooks with the deep-learning model;
-- <code>postprocessing</code>, contains the modules used for the data postprocessing;
-- <code>preliminary</code>, contains the notebooks with the preliminary data analysis, satellite image visualization, preprocessing steps, and other examples; 
-- <code>preprocessing</code>, contains the modules used for the data preprocessing.
+- <code>data</code>, dataset folders and region metadata for training/evaluation;
+- <code>images</code>, poster and figure assets;
+- <code>model</code>, model modules, trained checkpoints, and notebook subfolder;
+- <code>postprocessing</code>, modules used for data postprocessing;
+- <code>preprocessing</code>, modules used for data preprocessing;
+- <code>scripts</code>, runnable entry-point scripts grouped by stage:
+  - <code>scripts/data</code>: data download and preparation
+  - <code>scripts/inference</code>: inference and evaluation
+  - <code>scripts/postprocessing</code>: georeferencing and results plots
+  - <code>scripts/utils</code>: maintenance and helper utilities
 
 Data naming note:
 - Satellite region folders now use coordinate-based IDs (example: <code>lat24p6515_lon88p0207</code>).
@@ -60,7 +64,7 @@ conda env update -f braided.yml --prune
 conda activate braided
 ```
 
-Minimal packages for running <code>run_example.py</code> only:
+Minimal packages for running inference only:
 
 ```powershell
 pip install numpy pandas tifffile pillow torch
@@ -85,6 +89,12 @@ From the repository root, run:
 
 ```powershell
 cd C:\checkouts\dsaie_morph3\jamunet-morpho-braided-main
+python -m scripts.inference.run_example --region lat24p6515_lon88p0207 --target-year 2021 --skip-georef
+```
+
+Compatibility command (kept temporarily during migration):
+
+```powershell
 python run_example.py --region lat24p6515_lon88p0207 --target-year 2021 --skip-georef
 ```
 
