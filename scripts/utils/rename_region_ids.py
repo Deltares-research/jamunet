@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 from pathlib import Path
 from typing import Iterable
 
@@ -40,22 +39,54 @@ def region_slug(lat: float, lon: float) -> str:
 def read_geotiff_center(tif_path: Path) -> tuple[float, float, float, float, float, float]:
     with tifffile.TiffFile(tif_path) as tif:
         page = tif.pages[0]
-        scale = page.tags[33550].value
-        tiepoint = page.tags[33922].value
         height, width = page.shape
 
-        pixel_size_x = float(scale[0])
-        pixel_size_y = float(scale[1])
-        x0 = float(tiepoint[3])
-        y0 = float(tiepoint[4])
+        tags = page.tags
+        if 33550 in tags and 33922 in tags:
+            scale = tags[33550].value
+            tiepoint = tags[33922].value
 
-        center_lon = x0 + pixel_size_x * (width - 1) / 2.0
-        center_lat = y0 - pixel_size_y * (height - 1) / 2.0
+            pixel_size_x = float(scale[0])
+            pixel_size_y = float(scale[1])
+            x0 = float(tiepoint[3])
+            y0 = float(tiepoint[4])
 
-        lon_min = x0
-        lon_max = x0 + pixel_size_x * (width - 1)
-        lat_max = y0
-        lat_min = y0 - pixel_size_y * (height - 1)
+            center_lon = x0 + pixel_size_x * (width - 1) / 2.0
+            center_lat = y0 - pixel_size_y * (height - 1) / 2.0
+
+            lon_min = x0
+            lon_max = x0 + pixel_size_x * (width - 1)
+            lat_max = y0
+            lat_min = y0 - pixel_size_y * (height - 1)
+        elif 34264 in tags:
+            # ModelTransformationTag is a 4x4 matrix in row-major order.
+            # Map pixel coords (i, j, 0, 1) -> model (x, y, z, 1).
+            transform = [float(value) for value in tags[34264].value]
+            if len(transform) != 16:
+                raise ValueError(f"Unexpected ModelTransformationTag length in {tif_path}: {len(transform)}")
+
+            def to_model(i: float, j: float) -> tuple[float, float]:
+                x = transform[0] * i + transform[1] * j + transform[3]
+                y = transform[4] * i + transform[5] * j + transform[7]
+                return x, y
+
+            corners = [
+                to_model(0.0, 0.0),
+                to_model(float(width - 1), 0.0),
+                to_model(0.0, float(height - 1)),
+                to_model(float(width - 1), float(height - 1)),
+            ]
+            lon_values = [corner[0] for corner in corners]
+            lat_values = [corner[1] for corner in corners]
+
+            lon_min = min(lon_values)
+            lon_max = max(lon_values)
+            lat_min = min(lat_values)
+            lat_max = max(lat_values)
+            center_lon = (lon_min + lon_max) / 2.0
+            center_lat = (lat_min + lat_max) / 2.0
+        else:
+            raise KeyError(f"Missing georeferencing tags (33550/33922 or 34264) in {tif_path}")
 
     return center_lat, center_lon, lat_min, lat_max, lon_min, lon_max
 
@@ -69,17 +100,7 @@ def rename_path(src: Path, dst: Path, apply: bool) -> None:
         raise FileExistsError(f"Target already exists: {dst}")
     print(f"MOVE {src} -> {dst}")
     if apply:
-        if src.is_dir():
-            command = (
-                "Rename-Item -LiteralPath '"
-                + str(src).replace("'", "''")
-                + "' -NewName '"
-                + dst.name.replace("'", "''")
-                + "'"
-            )
-            subprocess.run(["powershell", "-NoProfile", "-Command", command], check=True)
-        else:
-            src.rename(dst)
+        src.rename(dst)
 
 
 def rename_children(dir_path: Path, old: str, new: str, apply: bool) -> None:
