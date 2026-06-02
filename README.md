@@ -92,12 +92,6 @@ cd C:\checkouts\dsaie_morph3\jamunet-morpho-braided-main
 python -m scripts.inference.run_example --region lat24p6515_lon88p0207 --target-year 2021 --skip-georef
 ```
 
-Compatibility command (kept temporarily during migration):
-
-```powershell
-python run_example.py --region lat24p6515_lon88p0207 --target-year 2021 --skip-georef
-```
-
 Notes:
 - Replace <code>lat24p6515_lon88p0207</code> with the region you want to evaluate.
 - Remove <code>--skip-georef</code> to also create georeferenced outputs.
