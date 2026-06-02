@@ -44,6 +44,17 @@ Catalog usage notes:
 - `region_catalog_model_ready.json` and `region_catalog_model_ready.geojson` describe model-ready footprints derived from the fixed preprocessing image size (default 1000x500 pixels at 60 m resolution).
 - Use the model-ready catalog files when you want polygons that match the standardized model input dimensions.
 
+Generate or refresh the model-ready catalog files with:
+
+```powershell
+cd <path-to-repo>
+python prepare_satellite_dataset.py --model-ready-catalog-only
+```
+
+This command writes:
+- `data/satellite/regions/region_catalog_model_ready.json`
+- `data/satellite/regions/region_catalog_model_ready.geojson`
+
 For detailed preprocessing inputs and outputs, see:
 `preprocessing/README.md`
 
