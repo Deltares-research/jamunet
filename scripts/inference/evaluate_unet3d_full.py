@@ -1,19 +1,26 @@
 import argparse
 import json
 import os
+import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import tifffile
 import torch
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from model.st_unet.st_unet import UNet3D_full
 
 
-DEFAULT_CHECKPOINT = (
-    "model/models_trained/"
-    "UNet3D_full_bloss_spatial_month3_4dwns_8ihiddim_3ker_"
-    "maxpool_0.05ilr_15step_0.75gamma_16batch_300epochs_0.5wthr.pth"
+DEFAULT_CHECKPOINT = str(
+    REPO_ROOT
+    / "model"
+    / "models_trained"
+    / "UNet3D_full_bloss_spatial_month3_4dwns_8ihiddim_3ker_maxpool_0.05ilr_15step_0.75gamma_16batch_300epochs_0.5wthr.pth"
 )
 
 
@@ -249,6 +256,11 @@ def evaluate_region_year(model, device, args, region_id, target_year):
 
 
 def load_model(checkpoint, device):
+    if not os.path.isabs(checkpoint):
+        checkpoint = str(REPO_ROOT / checkpoint)
+    if not os.path.exists(checkpoint):
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint}")
+
     model = UNet3D_full(in_channels=1, out_channels=1, init_features=8, temporal=3, seed=42).to(device)
     state_dict = torch.load(checkpoint, map_location=torch.device(device))
     model.load_state_dict(state_dict)

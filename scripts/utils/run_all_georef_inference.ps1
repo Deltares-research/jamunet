@@ -1,21 +1,43 @@
 param(
-    [string]$PythonExe = 'C:\checkouts\dsaie_morph3\.venv\Scripts\python.exe',
-    [string]$OutputRoot = 'outputs/all_regions_all_years_georef'
+    [string]$PythonExe = 'python',
+    [string]$OutputRoot = 'outputs/all_regions_all_years_georef',
+    [string]$RegionFilter = '',
+    [int]$TargetYear = 0
 )
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 
-Set-Location $PSScriptRoot
+$RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
+Set-Location $RepoRoot
 
 $collection = 'JRC_GSW1_4_MonthlyHistory'
-$catalogPath = Join-Path $PSScriptRoot 'data\satellite\regions\region_catalog.json'
-$datasetRoot = Join-Path $PSScriptRoot 'data\satellite\dataset_month3'
-$logDir = Join-Path $PSScriptRoot (Join-Path $OutputRoot '_logs')
-$summaryPath = Join-Path $PSScriptRoot (Join-Path $OutputRoot 'batch_summary.json')
-$failuresPath = Join-Path $PSScriptRoot (Join-Path $OutputRoot 'failures.json')
+$catalogCandidates = @(
+    (Join-Path $RepoRoot 'data\satellite\regions\region_catalog_model_ready.json'),
+    (Join-Path $RepoRoot 'data\satellite\regions\region_catalog_raw_available.json'),
+    (Join-Path $RepoRoot 'data\satellite\regions\region_catalog.json')
+)
+$catalogPath = $null
+foreach ($candidate in $catalogCandidates) {
+    if (Test-Path $candidate) {
+        $catalogPath = $candidate
+        break
+    }
+}
+$datasetRoot = Join-Path $RepoRoot 'data\satellite\dataset_month3'
+$logDir = Join-Path $RepoRoot (Join-Path $OutputRoot '_logs')
+$summaryPath = Join-Path $RepoRoot (Join-Path $OutputRoot 'batch_summary.json')
+$failuresPath = Join-Path $RepoRoot (Join-Path $OutputRoot 'failures.json')
+$runExamplePath = Join-Path $RepoRoot 'scripts\inference\run_example.py'
 
-New-Item -ItemType Directory -Force -Path (Join-Path $PSScriptRoot $OutputRoot) | Out-Null
+if ($null -eq $catalogPath) {
+    throw "Catalog not found. Checked: $($catalogCandidates -join ', ')"
+}
+if (-not (Test-Path $runExamplePath)) {
+    throw "Inference entrypoint not found: $runExamplePath"
+}
+
+New-Item -ItemType Directory -Force -Path (Join-Path $RepoRoot $OutputRoot) | Out-Null
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 $catalog = Get-Content $catalogPath -Raw | ConvertFrom-Json
@@ -33,6 +55,10 @@ foreach ($item in $catalog) {
     }
 }
 $regions = $regions | Sort-Object -Unique
+if ($RegionFilter -ne '') {
+    $requestedRegions = $RegionFilter.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
+    $regions = $regions | Where-Object { $requestedRegions -contains $_ }
+}
 
 $attempted = 0
 $successes = 0
@@ -64,8 +90,16 @@ foreach ($region in $regions) {
     }
 
     $targetYears = $years[4..($years.Count - 1)]
+    if ($TargetYear -gt 0) {
+        $targetYears = $targetYears | Where-Object { $_ -eq $TargetYear }
+    }
+
+    if ($targetYears.Count -eq 0) {
+        continue
+    }
+
     foreach ($year in $targetYears) {
-        $regionOutputDir = Join-Path $PSScriptRoot (Join-Path $OutputRoot $region)
+        $regionOutputDir = Join-Path $RepoRoot (Join-Path $OutputRoot $region)
         $expectedProbGeoref = Join-Path $regionOutputDir ("prediction_probabilities_georef_$region`_$year.tif")
         $expectedVisGeoref = Join-Path $regionOutputDir ("prediction_binary_vis_georef_$region`_$year.tif")
 
@@ -93,7 +127,7 @@ foreach ($region in $regions) {
         Write-Host ("[$attempted] Running region=$region year=$year")
 
         try {
-            $commandLine = '"' + $PythonExe + '" run_example.py --region ' + $region + ' --target-year ' + $year + ' --output-dir ' + $OutputRoot + ' 2>&1'
+            $commandLine = '"' + $PythonExe + '" "' + $runExamplePath + '" --region ' + $region + ' --target-year ' + $year + ' --output-dir ' + $OutputRoot + ' 2>&1'
             cmd.exe /d /c $commandLine |
                 Tee-Object -FilePath $logPath | Out-Host
             if ($LASTEXITCODE -eq 0) {
@@ -130,7 +164,7 @@ foreach ($region in $regions) {
     }
 }
 
-$sampleGeoref = Get-ChildItem (Join-Path $PSScriptRoot $OutputRoot) -Recurse -Filter '*_georef_*.tif' |
+$sampleGeoref = Get-ChildItem (Join-Path $RepoRoot $OutputRoot) -Recurse -Filter '*_georef_*.tif' |
     Select-Object -First 10 -ExpandProperty FullName
 
 $finalSummary = [pscustomobject]@{

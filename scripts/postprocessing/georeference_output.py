@@ -10,13 +10,61 @@ import os
 import sys
 import warnings
 
-from osgeo import gdal, osr
+import numpy as np
+
+try:
+    import rasterio
+except Exception:  # pragma: no cover - optional dependency
+    rasterio = None
+
+try:
+    from osgeo import gdal
+except Exception:  # pragma: no cover - optional dependency
+    gdal = None
 
 warnings.filterwarnings("ignore", category=FutureWarning)
-gdal.UseExceptions()
+if gdal is not None:
+    gdal.UseExceptions()
 
 
-def georeference(input_tif: str, reference_tif: str, output_tif: str) -> None:
+def _georeference_with_rasterio(input_tif: str, reference_tif: str, output_tif: str) -> None:
+    with rasterio.open(reference_tif) as ref_ds:
+        transform = ref_ds.transform
+        crs = ref_ds.crs
+
+    with rasterio.open(input_tif) as src_ds:
+        data = src_ds.read(1)
+        profile = src_ds.profile.copy()
+
+    profile.update(
+        {
+            "driver": "GTiff",
+            "count": 1,
+            "transform": transform,
+            "crs": crs,
+            "compress": "lzw",
+            "height": int(data.shape[0]),
+            "width": int(data.shape[1]),
+        }
+    )
+    profile.pop("blockxsize", None)
+    profile.pop("blockysize", None)
+    profile.pop("tiled", None)
+
+    if os.path.exists(output_tif):
+        os.remove(output_tif)
+    with rasterio.open(output_tif, "w", **profile) as out_ds:
+        out_ds.write(data.astype(profile["dtype"]) if profile.get("dtype") else np.asarray(data), 1)
+
+    print(f"Georeferenced TIF written: {output_tif}")
+    print(f"  CRS: {crs}")
+    print(f"  Transform: {transform}")
+
+
+def _georeference_with_gdal(input_tif: str, reference_tif: str, output_tif: str) -> None:
+    if gdal is None:
+        raise RuntimeError("GDAL backend unavailable")
+
     ref_ds = gdal.Open(reference_tif)
     if ref_ds is None:
         raise FileNotFoundError(f"Cannot open reference TIF: {reference_tif}")
@@ -52,8 +100,16 @@ def georeference(input_tif: str, reference_tif: str, output_tif: str) -> None:
     out_ds = None
 
     print(f"Georeferenced TIF written: {output_tif}")
-    print(f"  CRS: EPSG:4326 (WGS 84)")
+    print(f"  CRS: copied from reference")
     print(f"  Geotransform: {geotransform}")
+
+
+def georeference(input_tif: str, reference_tif: str, output_tif: str) -> None:
+    if rasterio is not None:
+        _georeference_with_rasterio(input_tif, reference_tif, output_tif)
+        return
+
+    _georeference_with_gdal(input_tif, reference_tif, output_tif)
 
 
 if __name__ == "__main__":

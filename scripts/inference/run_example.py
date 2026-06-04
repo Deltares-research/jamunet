@@ -6,9 +6,12 @@ the model implementation while keeping the rest of the workflow unchanged.
 """
 
 import os
+import sys
 import argparse
 import subprocess
 import json
+import shutil
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -16,7 +19,19 @@ import tifffile
 import torch
 from PIL import Image
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from model.st_unet.st_unet import UNet3D_full
+
+
+DEFAULT_CHECKPOINT = (
+    REPO_ROOT
+    / "model"
+    / "models_trained"
+    / "UNet3D_full_bloss_spatial_month3_4dwns_8ihiddim_3ker_maxpool_0.05ilr_15step_0.75gamma_16batch_300epochs_0.5wthr.pth"
+)
 
 
 def _center_crop_or_pad(image: np.ndarray, target_shape, fill_value=0):
@@ -130,9 +145,25 @@ def parse_args():
     parser.add_argument("--month", type=int, default=3, choices=[1, 2, 3, 4], help="Dataset month folder to use.")
     parser.add_argument("--target-year", type=int, default=2021, help="Year to predict (uses previous 4 years as input).")
     parser.add_argument("--output-dir", default="outputs/run_example", help="Base output directory.")
-    parser.add_argument("--braided-python", default=r"C:\Users\chavarri\AppData\Local\miniforge3\envs\braided\python.exe", help="Python executable with GDAL installed.")
+    parser.add_argument(
+        "--checkpoint",
+        default=str(DEFAULT_CHECKPOINT),
+        help="Path to pretrained model weights.",
+    )
+    parser.add_argument(
+        "--braided-python",
+        default=sys.executable,
+        help="Python executable used for georeferencing helper (must have rasterio or GDAL).",
+    )
     parser.add_argument("--skip-georef", action="store_true", help="Skip georeferenced output generation.")
     return parser.parse_args()
+
+
+def _resolve_python_command(command_or_path: str):
+    """Resolve either an absolute python path or a command available on PATH."""
+    if os.path.isabs(command_or_path):
+        return command_or_path if os.path.exists(command_or_path) else None
+    return shutil.which(command_or_path)
 
 
 def get_region_ids(region, regions):
@@ -229,16 +260,21 @@ def run_single_region(model, device, args, region_id):
         f"prediction_binary_vis_georef_{region_id}_{args.target_year}.tif",
     )
 
-    georef_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "georeference_output.py")
+    georef_script = str(REPO_ROOT / "scripts" / "postprocessing" / "georeference_output.py")
 
     if not args.skip_georef:
+        georef_success_count = 0
         ref_tif_name = None
         if os.path.isdir(original_dir):
-            ref_tif_name = next((f for f in os.listdir(original_dir) if f.startswith(str(args.target_year))), None)
+            ref_tif_name = next(
+                (f for f in sorted(os.listdir(original_dir)) if f.startswith(str(args.target_year)) and f.endswith(".tif")),
+                None,
+            )
         ref_tif = os.path.join(original_dir, ref_tif_name) if ref_tif_name else None
         flow_heading_deg = _load_region_flow_heading(args.data_root, region_id)
+        georef_python = _resolve_python_command(args.braided_python)
 
-        if os.path.exists(args.braided_python) and os.path.exists(georef_script) and ref_tif and os.path.exists(ref_tif):
+        if georef_python and os.path.exists(georef_script) and ref_tif and os.path.exists(ref_tif):
             ref_shape = tifffile.imread(ref_tif).shape
             for src, dst, binary_out in [
                 (prediction_path, georef_prob_path, False),
@@ -264,18 +300,23 @@ def run_single_region(model, device, args, region_id):
                     tifffile.imwrite(tmp_src, src_arr.astype(np.float32))
 
                 result = subprocess.run(
-                    [args.braided_python, georef_script, tmp_src, ref_tif, dst],
+                    [georef_python, georef_script, tmp_src, ref_tif, dst],
                     capture_output=True,
                     text=True,
                 )
                 if os.path.exists(tmp_src):
                     os.remove(tmp_src)
                 if result.returncode == 0:
+                    georef_success_count += 1
                     print(result.stdout.strip())
                 else:
                     print(f"Warning: georeferencing failed for {src}: {result.stderr.strip()}")
         else:
-            print(f"[{region_id}] Skipped georeferencing: braided env, script, or reference TIF not found.")
+            print(f"[{region_id}] Skipped georeferencing due to missing prerequisites:")
+            print(f"  python_ok={bool(georef_python)} (requested: {args.braided_python})")
+            print(f"  georef_script_ok={os.path.exists(georef_script)} ({georef_script})")
+            print(f"  reference_tif_ok={bool(ref_tif and os.path.exists(ref_tif))} ({ref_tif})")
+            georef_success_count = 0
 
     target_binary = sample_target
     pred_water_pixels = int(binary_prediction.sum().item())
@@ -295,8 +336,11 @@ def run_single_region(model, device, args, region_id):
     print(f"[{region_id}] Saved binary mask: {binary_path}")
     print(f"[{region_id}] Saved binary visualization TIFF (0/255): {binary_vis_tif_path}")
     if not args.skip_georef:
-        print(f"[{region_id}] Saved georeferenced probability map: {georef_prob_path}")
-        print(f"[{region_id}] Saved georeferenced binary visualization: {georef_vis_path}")
+        if georef_success_count == 2 and os.path.exists(georef_prob_path) and os.path.exists(georef_vis_path):
+            print(f"[{region_id}] Saved georeferenced probability map: {georef_prob_path}")
+            print(f"[{region_id}] Saved georeferenced binary visualization: {georef_vis_path}")
+        else:
+            print(f"[{region_id}] Georeferenced outputs not fully generated.")
 
 
 def main():
@@ -304,11 +348,11 @@ def main():
     region_ids = get_region_ids(args.region, args.regions)
     device = "cpu"
 
-    checkpoint = (
-        "model/models_trained/"
-        "UNet3D_full_bloss_spatial_month3_4dwns_8ihiddim_3ker_"
-        "maxpool_0.05ilr_15step_0.75gamma_16batch_300epochs_0.5wthr.pth"
-    )
+    checkpoint = args.checkpoint
+    if not os.path.isabs(checkpoint):
+        checkpoint = str(REPO_ROOT / checkpoint)
+    if not os.path.exists(checkpoint):
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint}")
 
     model = UNet3D_full(in_channels=1, out_channels=1, init_features=8, temporal=3, seed=42).to(device)
     state_dict = torch.load(checkpoint, map_location=torch.device(device))

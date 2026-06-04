@@ -88,38 +88,32 @@ For detailed preprocessing inputs and outputs, see:
 
 ## Installation
 
-Recommended full environment (scripts + notebooks):
+Use Python venv + pip (no conda required).
+
+From the repository root:
 
 ```powershell
 cd <path-to-repo>
-conda env create -f braided.yml
-conda activate braided
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install numpy pandas tifffile pillow scipy scikit-learn matplotlib seaborn tqdm openpyxl tabulate torch torchvision torchinfo
 ```
 
-If the environment already exists:
+For georeferenced output generation, install rasterio in the same active venv:
 
 ```powershell
-conda env update -f braided.yml --prune
-conda activate braided
-```
-
-Minimal packages for running only the example inference script:
-
-```powershell
-pip install numpy pandas tifffile pillow torch
-```
-
-Optional dependency for georeferenced output generation:
-
-```powershell
-conda install -c conda-forge gdal
+python -m pip install rasterio
 ```
 
 Notes:
 
-- GDAL is not required when using `--skip-georef`.
+- `rasterio` is required when georeferenced outputs are enabled (without `--skip-georef`).
+- `scripts/postprocessing/georeference_output.py` also supports GDAL (`osgeo`) as a fallback backend when available.
+- Python 3.12 was validated in this repository during the refactor fixes.
 - The default model checkpoint path is inside `model/models_trained`.
 - The `--region` value must match a coordinate-based region ID from the region catalog.
+- Run commands from the repository root.
 - Running `prepare_satellite_dataset.py` also writes model-ready polygon catalogs under `data/satellite/regions/`.
 
 ## Quick Inference Example (Target Year 2021)
@@ -128,13 +122,14 @@ From the repository root:
 
 ```powershell
 cd <path-to-repo>
-python run_example.py --region lat24p6515_lon88p0207 --target-year 2021 --skip-georef
+python scripts/inference/run_example.py --region lat24p6515_lon88p0207 --target-year 2021 --skip-georef
 ```
 
 Notes:
 
 - Replace `lat24p6515_lon88p0207` with your desired region ID.
 - Remove `--skip-georef` to also generate georeferenced outputs.
+- Use `--braided-python` only if you need georeferencing to run in a different Python environment that has GDAL.
 
 ## Citation
 
