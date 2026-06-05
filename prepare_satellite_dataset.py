@@ -789,13 +789,16 @@ def build_model_ready_region_catalog(args):
         os.path.join(args.data_root, "original"),
         args.collection,
     )
-    heading_map = load_heading_map(args.data_root, args.collection)
     model_ready_regions = _build_model_ready_region_index(args.data_root, args.collection)
     pairs_by_region = _build_model_ready_pairs(args.data_root, args.collection)
 
     records = []
+    errors = []
     for region_id in sorted(model_ready_regions):
         if region_id not in original_regions:
+            errors.append(
+                f"[{region_id}] Missing original region folder required for strict model-ready catalog."
+            )
             continue
 
         model_ready_info = model_ready_regions[region_id]
@@ -816,12 +819,10 @@ def build_model_ready_region_catalog(args):
             flow_heading_deg = (180.0 + angle_ccw) % 360.0
             footprint_source = "recovered_per_image_transform_to_original_geotiff"
         else:
-            flow_heading_deg = float(heading_map.get(region_id, 180.0))
-            angle_ccw = float(flow_heading_deg - 180.0)
-            match_score = None
-            representative_pair = None
-            original_tif_path = original_regions[region_id]["sample_tif_path"]
-            footprint_source = "heading_map_fallback_to_original_geotiff"
+            errors.append(
+                f"[{region_id}] Could not recover transform from model-ready/original TIFF pairs; strict mode forbids fallback heading defaults."
+            )
+            continue
 
         polygon = _model_ready_polygon_from_inverse_transform(
             original_tif_path=original_tif_path,
@@ -830,6 +831,9 @@ def build_model_ready_region_catalog(args):
             target_width=args.target_width,
         )
         if not _is_valid_polygon(polygon):
+            errors.append(
+                f"[{region_id}] Invalid polygon reconstructed from inverse transform ({original_tif_path})."
+            )
             continue
 
         record = _build_catalog_record_from_polygon(
@@ -852,6 +856,19 @@ def build_model_ready_region_catalog(args):
         else:
             record["representative_tif_name"] = os.path.basename(original_tif_path)
         records.append(record)
+
+    if errors:
+        preview = "\n".join(errors[:20])
+        extra = ""
+        if len(errors) > 20:
+            extra = f"\n... and {len(errors) - 20} more errors."
+        raise RuntimeError(
+            "Strict model-ready catalog generation failed due to missing required data:\n"
+            f"{preview}{extra}"
+        )
+
+    if not records:
+        raise RuntimeError("Strict model-ready catalog generation produced zero valid records.")
 
     with open(model_ready_json, "w", encoding="utf-8") as file:
         json.dump(records, file, indent=2)

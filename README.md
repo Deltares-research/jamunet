@@ -131,6 +131,22 @@ Notes:
 - Remove `--skip-georef` to also generate georeferenced outputs.
 - Use `--braided-python` only if you need georeferencing to run in a different Python environment that has GDAL.
 
+### Strict Georeferencing Behavior
+
+Inference georeferencing now runs in strict mode (no silent defaults for missing data).
+
+When `--skip-georef` is not used, all of the following are required:
+
+- `data/satellite/regions/region_catalog_model_ready.json` must exist and be non-empty.
+- The requested `--region` must exist in that model-ready catalog.
+- The region record must contain a numeric `flow_heading_deg` in `[0, 360)`.
+- The exact target TIFF filename selected for inference (same year/month/day name) must exist under `data/satellite/original/<collection>_<region_id>/`.
+- The georeferencing helper script `scripts/postprocessing/georeference_output.py` must exist and the selected Python executable must be resolvable.
+
+If any prerequisite is missing or inconsistent, inference fails fast with an explicit error.
+
+This avoids orientation regressions where outputs were previously generated with fallback crop/pad behavior after heading lookup failures.
+
 ## Citation
 
 Please cite the original thesis as:

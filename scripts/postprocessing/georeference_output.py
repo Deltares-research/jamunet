@@ -31,10 +31,30 @@ def _georeference_with_rasterio(input_tif: str, reference_tif: str, output_tif: 
     with rasterio.open(reference_tif) as ref_ds:
         transform = ref_ds.transform
         crs = ref_ds.crs
+        ref_height = int(ref_ds.height)
+        ref_width = int(ref_ds.width)
+
+    if crs is None:
+        raise ValueError(f"Reference TIFF has no CRS: {reference_tif}")
+    if transform is None:
+        raise ValueError(f"Reference TIFF has no transform: {reference_tif}")
 
     with rasterio.open(input_tif) as src_ds:
+        if int(src_ds.count) != 1:
+            raise ValueError(
+                f"Strict georeferencing expects a single-band input TIFF. "
+                f"Found {src_ds.count} bands in {input_tif}"
+            )
         data = src_ds.read(1)
         profile = src_ds.profile.copy()
+
+    if data.ndim != 2:
+        raise ValueError(f"Input TIFF must be 2D after reading band 1: {input_tif} shape={data.shape}")
+    if int(data.shape[0]) != ref_height or int(data.shape[1]) != ref_width:
+        raise ValueError(
+            "Input/reference shape mismatch for strict georeferencing. "
+            f"input={data.shape}, reference=({ref_height}, {ref_width}), input_tif={input_tif}, reference_tif={reference_tif}"
+        )
 
     profile.update(
         {
@@ -70,17 +90,34 @@ def _georeference_with_gdal(input_tif: str, reference_tif: str, output_tif: str)
         raise FileNotFoundError(f"Cannot open reference TIF: {reference_tif}")
     geotransform = ref_ds.GetGeoTransform()
     projection = ref_ds.GetProjectionRef()
+    ref_xsize = int(ref_ds.RasterXSize)
+    ref_ysize = int(ref_ds.RasterYSize)
     ref_ds = None  # close
+
+    if geotransform is None:
+        raise ValueError(f"Reference TIFF has no geotransform: {reference_tif}")
+    if not projection:
+        raise ValueError(f"Reference TIFF has no projection: {reference_tif}")
 
     src_ds = gdal.Open(input_tif)
     if src_ds is None:
         raise FileNotFoundError(f"Cannot open input TIF: {input_tif}")
+    if int(src_ds.RasterCount) != 1:
+        raise ValueError(
+            f"Strict georeferencing expects a single-band input TIFF. Found {src_ds.RasterCount} bands in {input_tif}"
+        )
     band = src_ds.GetRasterBand(1)
     data = band.ReadAsArray()
     dtype = band.DataType
     xsize = src_ds.RasterXSize
     ysize = src_ds.RasterYSize
     src_ds = None  # close
+
+    if int(ysize) != ref_ysize or int(xsize) != ref_xsize:
+        raise ValueError(
+            "Input/reference shape mismatch for strict georeferencing. "
+            f"input=({ysize}, {xsize}), reference=({ref_ysize}, {ref_xsize}), input_tif={input_tif}, reference_tif={reference_tif}"
+        )
 
     driver = gdal.GetDriverByName("GTiff")
     if os.path.exists(output_tif):

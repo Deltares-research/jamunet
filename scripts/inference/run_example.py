@@ -94,25 +94,47 @@ def _reverse_center_crop_or_pad(image: np.ndarray, target_shape, fill_value=0):
     return out
 
 
-def _load_region_flow_heading(data_root: str, region_id: str):
-    candidates = [
-        os.path.join(data_root, "regions", "region_catalog.json"),
-        os.path.join(data_root, "regions", "eval_reaches.json"),
-    ]
-    metadata_path = next((path for path in candidates if os.path.exists(path)), None)
-    if metadata_path is None:
-        return None
+def _load_region_flow_heading(data_root: str, region_id: str) -> float:
+    metadata_path = os.path.join(data_root, "regions", "region_catalog_model_ready.json")
+    if not os.path.exists(metadata_path):
+        raise FileNotFoundError(
+            "Missing required model-ready catalog for strict georeferencing: "
+            f"{metadata_path}"
+        )
 
-    try:
-        with open(metadata_path, "r", encoding="utf-8") as file:
-            reaches = json.load(file)
-        for reach in reaches:
-            if reach.get("region_id") == region_id:
-                return float(reach.get("flow_heading_deg", 180.0))
-    except Exception:
-        return None
+    with open(metadata_path, "r", encoding="utf-8") as file:
+        reaches = json.load(file)
 
-    return None
+    if not isinstance(reaches, list):
+        raise ValueError(f"Catalog payload must be a JSON array: {metadata_path}")
+    if len(reaches) == 0:
+        raise ValueError(
+            "Model-ready catalog is empty; strict georeferencing requires populated metadata. "
+            f"Regenerate: {metadata_path}"
+        )
+
+    sample_region_ids = []
+    for reach in reaches:
+        if len(sample_region_ids) < 5 and "region_id" in reach:
+            sample_region_ids.append(str(reach.get("region_id")))
+        if reach.get("region_id") != region_id:
+            continue
+        if "flow_heading_deg" not in reach:
+            raise KeyError(
+                "Missing flow_heading_deg in model-ready catalog record for region "
+                f"{region_id} ({metadata_path})"
+            )
+        heading = float(reach["flow_heading_deg"])
+        if not (0.0 <= heading < 360.0):
+            raise ValueError(
+                f"Invalid flow_heading_deg={heading} for region {region_id}; expected [0, 360)."
+            )
+        return heading
+
+    raise KeyError(
+        f"Region {region_id} not found in model-ready catalog: {metadata_path}. "
+        f"Catalog records={len(reaches)} sample_region_ids={sample_region_ids}"
+    )
 
 
 def _restore_to_reference_space(image: np.ndarray, ref_shape, flow_heading_deg, binary=False):
@@ -264,36 +286,54 @@ def run_single_region(model, device, args, region_id):
 
     if not args.skip_georef:
         georef_success_count = 0
-        ref_tif_name = None
-        if os.path.isdir(original_dir):
-            ref_tif_name = next(
-                (f for f in sorted(os.listdir(original_dir)) if f.startswith(str(args.target_year)) and f.endswith(".tif")),
-                None,
+        if not os.path.isdir(original_dir):
+            raise FileNotFoundError(
+                f"Missing original folder required for strict georeferencing: {original_dir}"
             )
-        ref_tif = os.path.join(original_dir, ref_tif_name) if ref_tif_name else None
+
+        target_tif_name = selected[4]
+        original_tifs = sorted(f for f in os.listdir(original_dir) if f.endswith(".tif"))
+        if target_tif_name not in original_tifs:
+            raise FileNotFoundError(
+                "Strict georeferencing requires exact reference TIFF name match. "
+                f"Target={target_tif_name}, original_dir={original_dir}"
+            )
+        ref_tif_name = target_tif_name
+        ref_tif = os.path.join(original_dir, ref_tif_name)
+
         flow_heading_deg = _load_region_flow_heading(args.data_root, region_id)
         georef_python = _resolve_python_command(args.braided_python)
 
-        if georef_python and os.path.exists(georef_script) and ref_tif and os.path.exists(ref_tif):
-            ref_shape = tifffile.imread(ref_tif).shape
-            for src, dst, binary_out in [
-                (prediction_path, georef_prob_path, False),
-                (binary_vis_tif_path, georef_vis_path, True),
-            ]:
-                src_arr = tifffile.imread(src)
-                src_arr = src_arr.squeeze()
+        if not georef_python:
+            raise RuntimeError(
+                f"Missing Python executable for georeferencing helper: {args.braided_python}"
+            )
+        if not os.path.exists(georef_script):
+            raise FileNotFoundError(f"Missing georeferencing helper script: {georef_script}")
+        if not os.path.exists(ref_tif):
+            raise FileNotFoundError(f"Missing reference TIFF: {ref_tif}")
 
-                if flow_heading_deg is not None:
-                    src_arr = _restore_to_reference_space(
-                        src_arr,
-                        ref_shape=ref_shape,
-                        flow_heading_deg=flow_heading_deg,
-                        binary=binary_out,
-                    )
-                else:
-                    src_arr = _center_crop_or_pad(src_arr, ref_shape, fill_value=0)
+        print(f"[{region_id}] Georeferencing reference TIFF: {ref_tif_name}")
+        print(f"[{region_id}] Using flow_heading_deg={flow_heading_deg:.6f}")
+        ref_shape = tifffile.imread(ref_tif).shape
+        if len(ref_shape) < 2:
+            raise ValueError(f"Unexpected reference TIFF shape for {ref_tif}: {ref_shape}")
+        ref_shape_2d = (int(ref_shape[0]), int(ref_shape[1]))
 
-                tmp_src = os.path.join(region_output_dir, f"__tmp_mapspace_{os.path.basename(src)}")
+        for src, dst, binary_out in [
+            (prediction_path, georef_prob_path, False),
+            (binary_vis_tif_path, georef_vis_path, True),
+        ]:
+            src_arr = tifffile.imread(src).squeeze()
+            src_arr = _restore_to_reference_space(
+                src_arr,
+                ref_shape=ref_shape_2d,
+                flow_heading_deg=flow_heading_deg,
+                binary=binary_out,
+            )
+
+            tmp_src = os.path.join(region_output_dir, f"__tmp_mapspace_{os.path.basename(src)}")
+            try:
                 if binary_out:
                     tifffile.imwrite(tmp_src, src_arr.astype(np.uint8))
                 else:
@@ -304,19 +344,19 @@ def run_single_region(model, device, args, region_id):
                     capture_output=True,
                     text=True,
                 )
+            finally:
                 if os.path.exists(tmp_src):
                     os.remove(tmp_src)
-                if result.returncode == 0:
-                    georef_success_count += 1
-                    print(result.stdout.strip())
-                else:
-                    print(f"Warning: georeferencing failed for {src}: {result.stderr.strip()}")
-        else:
-            print(f"[{region_id}] Skipped georeferencing due to missing prerequisites:")
-            print(f"  python_ok={bool(georef_python)} (requested: {args.braided_python})")
-            print(f"  georef_script_ok={os.path.exists(georef_script)} ({georef_script})")
-            print(f"  reference_tif_ok={bool(ref_tif and os.path.exists(ref_tif))} ({ref_tif})")
-            georef_success_count = 0
+
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"Georeferencing failed for {src} -> {dst}. "
+                    f"stderr={result.stderr.strip()} stdout={result.stdout.strip()}"
+                )
+
+            georef_success_count += 1
+            if result.stdout.strip():
+                print(result.stdout.strip())
 
     target_binary = sample_target
     pred_water_pixels = int(binary_prediction.sum().item())
@@ -336,11 +376,12 @@ def run_single_region(model, device, args, region_id):
     print(f"[{region_id}] Saved binary mask: {binary_path}")
     print(f"[{region_id}] Saved binary visualization TIFF (0/255): {binary_vis_tif_path}")
     if not args.skip_georef:
-        if georef_success_count == 2 and os.path.exists(georef_prob_path) and os.path.exists(georef_vis_path):
-            print(f"[{region_id}] Saved georeferenced probability map: {georef_prob_path}")
-            print(f"[{region_id}] Saved georeferenced binary visualization: {georef_vis_path}")
-        else:
-            print(f"[{region_id}] Georeferenced outputs not fully generated.")
+        if georef_success_count != 2 or not os.path.exists(georef_prob_path) or not os.path.exists(georef_vis_path):
+            raise RuntimeError(
+                f"Strict georeferencing expected 2 outputs but got {georef_success_count} for {region_id}."
+            )
+        print(f"[{region_id}] Saved georeferenced probability map: {georef_prob_path}")
+        print(f"[{region_id}] Saved georeferenced binary visualization: {georef_vis_path}")
 
 
 def main():
