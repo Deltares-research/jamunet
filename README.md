@@ -86,6 +86,26 @@ python prepare_satellite_dataset.py --model-ready-catalog-only
 For detailed preprocessing inputs and outputs, see:
 `preprocessing/README.md`
 
+## Downloading JRC Images
+
+Use `scripts/data/download_jrc_gee.py` to create region catalogs and download monthly JRC images.
+
+If you want reaches to follow a river centerline instead of a straight start-end segment, pass a polyline file with `--axis-file`.
+The file can be KML or XML as long as it contains a `LineString` with `coordinates`.
+
+Create a catalog only (for inspection, no Earth Engine download):
+
+```powershell
+cd <path-to-repo>
+python scripts/data/download_jrc_gee.py --axis-file data_tmp/padma.kml --num-reaches 12 --southwest-shift-reaches none --data-root data/satellite_padma_downstream_axis --dry-run
+```
+
+This command writes:
+- `data/satellite_padma_downstream_axis/regions/region_catalog.json`
+- `data/satellite_padma_downstream_axis/regions/region_catalog.geojson`
+
+After inspection, remove `--dry-run` (and pass `--ee-project <your_project_id>` if needed) to start downloading images.
+
 ## Installation
 
 Use Python venv + pip (no conda required).
